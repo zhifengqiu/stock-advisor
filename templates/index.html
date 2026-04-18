@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>量化因子 - 股票操作建议系统</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ v }}">
 </head>
 <body>
     <!-- ====== 首页搜索 ====== -->
@@ -31,6 +31,10 @@
                 <a href="#" onclick="quickSearch('000858')">五粮液</a>
                 <a href="#" onclick="quickSearch('300750')">宁德时代</a>
             </div>
+            <div id="historySection" class="history-section hidden">
+                <h3 class="history-title">历史记录</h3>
+                <div id="historyList" class="history-list"></div>
+            </div>
         </div>
     </div>
 
@@ -48,6 +52,7 @@
                 <div id="topSuggestions" class="suggestions top-suggestions hidden"></div>
             </div>
             <div class="stock-info" id="stockInfo"></div>
+            <button class="refresh-btn" onclick="refreshStock()" title="重新加载">&#x21bb;</button>
         </header>
 
         <!-- 主体内容 -->
@@ -143,6 +148,6 @@
         <p>正在分析中...</p>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v={{ v }}"></script>
 </body>
 </html>

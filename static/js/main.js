@@ -84,22 +84,41 @@ async function resolveAndLoad(rawInput) {
         return;
     }
 
-    // 否则当作名称去搜索接口解析
-    showLoading(true);
+    // 名称/拼音搜索：先立即切换到分析页显示加载，后台解析代码
+    document.getElementById("landing").classList.add("hidden");
+    document.getElementById("mainPage").classList.remove("hidden");
+    document.getElementById("stockInfo").innerHTML =
+        `<span class="name">搜索中...</span><span class="code-label">${q}</span>`;
+    document.getElementById("chartTitle").innerHTML =
+        `<span class="chart-title-name">搜索 "${q}" 中...</span>`;
+
+    if (!klineChart) {
+        klineChart = echarts.init(document.getElementById("klineChart"), "dark");
+        window.addEventListener("resize", () => klineChart && klineChart.resize());
+    }
+    klineChart.clear();
+    klineChart.showLoading({ text: "正在搜索...", color: "#3b82f6", textColor: "#8899aa" });
+
+    document.getElementById("recText").textContent = "搜索中...";
+    document.getElementById("recText").className = "rec-text hold";
+    document.getElementById("signalsList").innerHTML = `<div class="loading-text">正在搜索 "${q}"...</div>`;
+    document.getElementById("newsList").innerHTML = `<div class="loading-text">等待搜索结果...</div>`;
+
     try {
         const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
         const results = await resp.json();
         if (results.length === 0) {
-            showLoading(false);
-            alert("未找到匹配的股票，请检查输入");
+            klineChart.hideLoading();
+            document.getElementById("signalsList").innerHTML = `<div class="loading-text">未找到匹配的股票</div>`;
+            document.getElementById("newsList").innerHTML = `<div class="loading-text">未找到</div>`;
             return;
         }
-        // 取第一个匹配结果
+        // 找到股票，加载分析
         const stock = results[0];
         loadStock(stock.code);
     } catch (e) {
-        showLoading(false);
-        alert("搜索失败: " + e.message);
+        klineChart.hideLoading();
+        document.getElementById("signalsList").innerHTML = `<div class="loading-text">搜索失败: ${e.message}</div>`;
     }
 }
 
@@ -127,10 +146,44 @@ async function loadStock(code) {
     }
 
     currentCode = code;
-    showLoading(true);
+    allData = null;
+
+    // 立即切换到分析页面，显示加载骨架
+    document.getElementById("landing").classList.add("hidden");
+    document.getElementById("mainPage").classList.remove("hidden");
+
+    // 更新顶部信息（先用代码占位）
+    document.getElementById("stockInfo").innerHTML =
+        `<span class="name">${code}</span><span class="code-label">加载中...</span>`;
+    document.getElementById("chartTitle").innerHTML =
+        `<span class="chart-title-name">${code}</span><span class="chart-title-code">加载中...</span>`;
+
+    // 图表区域显示加载状态
+    if (klineChart) {
+        klineChart.clear();
+        klineChart.showLoading({ text: "正在获取K线数据...", color: "#3b82f6", textColor: "#8899aa" });
+    } else {
+        const chartDom = document.getElementById("klineChart");
+        klineChart = echarts.init(chartDom, "dark");
+        window.addEventListener("resize", () => klineChart && klineChart.resize());
+        klineChart.showLoading({ text: "正在获取K线数据...", color: "#3b82f6", textColor: "#8899aa" });
+    }
+
+    // 右侧面板显示加载状态
+    document.getElementById("recText").textContent = "分析中...";
+    document.getElementById("recText").className = "rec-text hold";
+    document.getElementById("recStrength").textContent = "--";
+    document.getElementById("recScore").textContent = "--";
+    document.getElementById("levelCurrent").textContent = "--";
+    document.getElementById("levelSupport").textContent = "--";
+    document.getElementById("levelResistance").textContent = "--";
+    document.getElementById("levelStopLoss").textContent = "--";
+    document.getElementById("levelTarget").textContent = "--";
+    document.getElementById("signalsList").innerHTML = `<div class="loading-text">正在计算技术指标...</div>`;
+    document.getElementById("newsList").innerHTML = `<div class="loading-text">正在分析消息面...</div>`;
 
     try {
-        // 第一步：加载图表 + 技术分析（快速）
+        // 加载图表 + 技术分析
         const resp = await fetch(`/api/stock/${code}`);
         if (!resp.ok) {
             const err = await resp.json();
@@ -139,33 +192,29 @@ async function loadStock(code) {
         allData = await resp.json();
         currentName = allData.name;
 
-        // 切换到分析页面
-        document.getElementById("landing").classList.add("hidden");
-        document.getElementById("mainPage").classList.remove("hidden");
-
         // 更新顶部信息
         document.getElementById("stockInfo").innerHTML =
             `<span class="name">${currentName}</span><span class="code-label">${currentCode}</span>`;
-
-        // 更新图表面板标题
         document.getElementById("chartTitle").innerHTML =
             `<span class="chart-title-name">${currentName}</span><span class="chart-title-code">${currentCode}</span>`;
 
-        // 初始化图表（立即显示）
-        initChart();
-
-        // 渲染技术面推荐（立即显示）
+        // 渲染图表 + 技术面
+        klineChart.hideLoading();
+        renderChart();
         updateRecommendation();
 
-        showLoading(false);
-
-        // 第二步：异步加载消息面（慢，不阻塞页面）
-        loadNewsSentiment(code);
+        // 保存到历史记录
+        saveToHistory(code, currentName, allData);
 
     } catch (e) {
-        showLoading(false);
-        alert("分析失败: " + e.message);
+        if (klineChart) klineChart.hideLoading();
+        document.getElementById("signalsList").innerHTML = `<div class="loading-text">加载失败: ${e.message}</div>`;
+        document.getElementById("newsList").innerHTML = `<div class="loading-text">加载失败</div>`;
+        return;
     }
+
+    // 异步加载消息面（不阻塞）
+    loadNewsSentiment(code);
 }
 
 async function loadNewsSentiment(code) {
@@ -181,6 +230,8 @@ async function loadNewsSentiment(code) {
         }
         // 存储到 allData 供策略切换时使用
         allData.news_sentiment = data;
+        // 更新历史记录中的消息面
+        updateHistoryNews(code, data);
         // 重新渲染消息面
         updateNewsPanel(data);
     } catch (e) {
@@ -216,6 +267,7 @@ function initChart() {
         klineChart = echarts.init(dom, "dark");
         window.addEventListener("resize", () => klineChart && klineChart.resize());
     }
+    klineChart.hideLoading();
     renderChart();
 }
 
@@ -456,8 +508,8 @@ function updateRecommendation() {
             return `<div class="signal-item ${s.action}">
                 <span class="signal-icon">${icon}</span>
                 <div class="signal-content">
-                    <div class="signal-name">${s.name}</div>
-                    <div class="signal-desc">${s.desc}</div>
+                    <span class="signal-name">${s.name}</span>
+                    <span class="signal-desc">${s.desc}</span>
                 </div>
             </div>`;
         }).join("");
@@ -478,6 +530,128 @@ function getAction(rec) {
 }
 
 // ============================================================
+// 历史记录（localStorage）
+// ============================================================
+
+const HISTORY_KEY = "stock_history";
+const HISTORY_MAX = 15;
+
+function loadHistory() {
+    try {
+        return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveHistory(list) {
+    try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    } catch (e) {
+        // localStorage 满了，删掉最旧的一半
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, Math.ceil(HISTORY_MAX / 2))));
+    }
+}
+
+function saveToHistory(code, name, data) {
+    const list = loadHistory();
+    // 去重：移除同代码的旧记录
+    const filtered = list.filter(h => h.code !== code);
+    filtered.unshift({
+        code,
+        name,
+        timestamp: Date.now(),
+        data
+    });
+    // 限制数量
+    saveHistory(filtered.slice(0, HISTORY_MAX));
+}
+
+function updateHistoryNews(code, newsData) {
+    const list = loadHistory();
+    const item = list.find(h => h.code === code);
+    if (item && item.data) {
+        item.data.news_sentiment = newsData;
+        saveHistory(list);
+    }
+}
+
+function formatTime(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    // 今天的只显示时间，非今天显示日期
+    if (d.toDateString() === now.toDateString()) return time;
+    return `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
+
+function renderHistory() {
+    const section = document.getElementById("historySection");
+    const container = document.getElementById("historyList");
+    const list = loadHistory();
+    if (!list.length) {
+        section.classList.add("hidden");
+        return;
+    }
+    section.classList.remove("hidden");
+    container.innerHTML = list.map(h => `
+        <div class="history-item" onclick="loadFromHistory('${h.code}')">
+            <span class="h-name">${h.name}</span>
+            <span class="h-code">${h.code}</span>
+            <span class="h-time">${formatTime(h.timestamp)}</span>
+            <span class="h-refresh" onclick="event.stopPropagation(); loadStock('${h.code}')" title="重新加载">&#x21bb;</span>
+        </div>
+    `).join("");
+}
+
+function loadFromHistory(code) {
+    const list = loadHistory();
+    const item = list.find(h => h.code === code);
+    if (!item || !item.data) {
+        loadStock(code);
+        return;
+    }
+
+    currentCode = item.code;
+    currentName = item.name;
+    allData = item.data;
+
+    // 立即切换到分析页面
+    document.getElementById("landing").classList.add("hidden");
+    document.getElementById("mainPage").classList.remove("hidden");
+
+    // 更新顶部信息
+    document.getElementById("stockInfo").innerHTML =
+        `<span class="name">${currentName}</span><span class="code-label">${currentCode}</span>`;
+    document.getElementById("chartTitle").innerHTML =
+        `<span class="chart-title-name">${currentName}</span><span class="chart-title-code">${currentCode}</span>`;
+
+    // 渲染图表和推荐
+    if (klineChart) {
+        klineChart.clear();
+    } else {
+        const chartDom = document.getElementById("klineChart");
+        klineChart = echarts.init(chartDom, "dark");
+        window.addEventListener("resize", () => klineChart && klineChart.resize());
+    }
+    klineChart.hideLoading();
+    renderChart();
+    updateRecommendation();
+
+    // 如果没有消息面数据，异步加载
+    if (!allData.news_sentiment) {
+        loadNewsSentiment(code);
+    }
+}
+
+function refreshStock() {
+    if (currentCode) {
+        loadStock(currentCode);
+    }
+}
+
+// ============================================================
 // UI 辅助
 // ============================================================
 
@@ -490,6 +664,7 @@ function goHome() {
     document.getElementById("landing").classList.remove("hidden");
     searchInput.value = "";
     searchInput.focus();
+    renderHistory();
 }
 
 // 点击空白处关闭建议
@@ -504,3 +679,5 @@ document.addEventListener("click", (e) => {
 
 // 搜索框聚焦
 if (searchInput) searchInput.focus();
+// 首页渲染历史记录
+renderHistory();

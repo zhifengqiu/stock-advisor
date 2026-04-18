@@ -501,6 +501,7 @@ body {
     border-radius: var(--radius-sm);
     font-size: 13px;
     line-height: 1.5;
+    width: 100%;
 }
 
 .signal-item.buy {
@@ -519,14 +520,18 @@ body {
 }
 
 .signal-icon {
-    font-size: 16px;
+    font-size: 14px;
+    font-weight: 700;
     flex-shrink: 0;
-    margin-top: 1px;
+    width: 16px;
+    text-align: center;
+    line-height: 1.5;
 }
 
 .signal-content {
     flex: 1;
     min-width: 0;
+    overflow: hidden;
 }
 
 .signal-name {
@@ -536,11 +541,101 @@ body {
 
 .signal-desc {
     color: var(--text-secondary);
-    margin-top: 2px;
     font-size: 12px;
+    margin-left: 4px;
 }
 
 /* 消息面列表 - 复用 signal-item 样式 */
+
+/* 历史记录 */
+.history-section {
+    margin-top: 28px;
+    text-align: left;
+}
+
+.history-title {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.history-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    gap: 12px;
+}
+
+.history-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+}
+
+.history-item .h-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.history-item .h-code {
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.history-item .h-time {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.history-item .h-refresh {
+    color: var(--text-muted);
+    font-size: 16px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+    flex-shrink: 0;
+}
+
+.history-item .h-refresh:hover {
+    color: var(--accent);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+/* 分析页刷新按钮 */
+.refresh-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 18px;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+}
+
+.refresh-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
 
 .loading-text {
     color: var(--text-muted);

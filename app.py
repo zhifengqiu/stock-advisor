@@ -901,18 +901,30 @@ def fetch_stock_data(code, days=3650):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", v=int(time.time()))
 
 
 @app.route("/api/search")
 def search_stock():
-    """搜索股票（支持代码/名称/拼音首字母/全拼，对齐同花顺）"""
+    """搜索股票 — 优先用缓存，秒级响应"""
     q = request.args.get("q", "").strip().lower()
     if not q:
         return jsonify([])
-    stocks = get_stock_list()
+    # 搜索接口优先用内存/本地缓存，不触发 API 重试（保证响应速度）
+    stocks = _stock_list_cache.get("data")
     if not stocks:
-        stocks = get_stock_list(force_refresh=True)
+        stocks = _load_stock_list_local()
+    if not stocks:
+        # 最后兜底才尝试 API，但只试一次
+        try:
+            stocks = _build_stock_list()
+            _stock_list_cache["data"] = stocks
+            _stock_list_cache["ts"] = time.time()
+            _save_stock_list_local(stocks)
+        except Exception:
+            stocks = []
+    if not stocks:
+        return jsonify([])
 
     q_lower = q.lower()
     results = []
