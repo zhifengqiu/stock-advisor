@@ -1,4 +1,3 @@
 __pycache__/
 *.pyc
 .env
-stock_list_cache.json
