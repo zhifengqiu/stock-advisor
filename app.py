@@ -840,7 +840,7 @@ def _fetch_via_sina(code, datalen=800):
 
 
 def _fetch_via_yahoo(code, days=365):
-    """通过 Yahoo Finance Chart API 获取K线数据（用 Session 绕过认证限制）"""
+    """通过 Yahoo Finance Chart API 获取K线数据"""
     import requests as req
 
     # 转换代码格式：600519 → 600519.SS，002384 → 002384.SZ
@@ -867,24 +867,11 @@ def _fetch_via_yahoo(code, days=365):
     else:
         yrange = "1mo"
 
-    # 用 Session 获取 cookie → crumb → 数据（绕过 403 限制）
-    s = req.Session()
-    s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                     "AppleWebKit/537.36 Chrome/120.0.0.0"})
-    s.get("https://finance.yahoo.com/", timeout=8)
-
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
     params = {"range": yrange, "interval": "1d"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120"}
 
-    # 尝试获取 crumb（可选，即使失败也继续）
-    try:
-        crumb_resp = s.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=5)
-        if crumb_resp.ok and crumb_resp.text.strip():
-            params["crumb"] = crumb_resp.text.strip()
-    except Exception:
-        pass
-
-    resp = s.get(url, params=params, timeout=10)
+    resp = req.get(url, params=params, headers=headers, timeout=8)
     resp.raise_for_status()
     data = resp.json()
 
@@ -975,34 +962,25 @@ def _fetch_via_twelvedata(code, days=365):
 
 
 def _fetch_via_akshare(code, days=365):
-    """通过 akshare (东财) 获取K线数据（带超时保护）"""
+    """通过 akshare (东财) 获取K线数据"""
     import akshare as ak
-    import concurrent.futures
 
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
-    # akshare 无 timeout 参数，用线程池强制10秒超时
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(
-        lambda: ak.stock_zh_a_hist(
-            symbol=code, period="daily",
-            start_date=start_date, end_date=end_date, adjust="qfq"
-        )
+    df = _ak_call(
+        ak.stock_zh_a_hist,
+        symbol=code, period="daily",
+        start_date=start_date, end_date=end_date, adjust="qfq",
+        retries=1,
     )
-    try:
-        raw_df = future.result(timeout=10)
-    except concurrent.futures.TimeoutError:
-        raise Exception("东财API超时(10s)")
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
 
     col_map = {
         "日期": "date", "开盘": "open", "收盘": "close",
         "最高": "high", "最低": "low", "成交量": "volume",
         "成交额": "amount", "涨跌幅": "change_pct",
     }
-    df = raw_df.rename(columns={k: v for k, v in col_map.items() if k in raw_df.columns})
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
     for col in ["open", "close", "high", "low", "volume"]:
         if col in df.columns:
@@ -1013,62 +991,43 @@ def _fetch_via_akshare(code, days=365):
 
 
 def fetch_stock_data(code, days=3650):
-    """获取股票历史数据 — 三源并行(15s) → 新浪兜底(8s)"""
-    import concurrent.futures
-
+    """获取股票历史数据 — TwelveData → Yahoo → 新浪，顺序获取，硬性25秒截止"""
+    _start = time.time()
+    _deadline = 25
     errors = []
 
-    def _safe(name, fn, *args):
-        """包装数据源调用，返回 (name, df_or_None, error_str_or_None)"""
+    # 1. Twelve Data（全球CDN，海外最快）
+    if time.time() - _start < _deadline:
         try:
-            df = fn(*args)
-            return (name, df, None)
+            df = _fetch_via_twelvedata(code, days)
+            if not df.empty:
+                print(f"[数据] {code} 从TwelveData获取 {len(df)} 条 ({time.time()-_start:.1f}s)")
+                return df
         except Exception as e:
-            return (name, None, str(e))
+            errors.append(f"TwelveData: {e}")
+            print(f"[数据] TwelveData失败 ({time.time()-_start:.1f}s): {e}")
 
-    # 阶段1: Yahoo + TwelveData + akshare 三源并行（最多15秒）
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-    try:
-        futures = [
-            pool.submit(_safe, "TwelveData", _fetch_via_twelvedata, code, days),
-            pool.submit(_safe, "Yahoo", _fetch_via_yahoo, code, days),
-            pool.submit(_safe, "东财", _fetch_via_akshare, code, days),
-        ]
+    # 2. Yahoo Finance（全球CDN）
+    if time.time() - _start < _deadline:
         try:
-            for future in concurrent.futures.as_completed(futures, timeout=15):
-                try:
-                    name, df, err = future.result()
-                    if df is not None and not df.empty:
-                        print(f"[数据] {code} 从{name}获取 {len(df)} 条")
-                        return df
-                    if err:
-                        errors.append(f"{name}: {err}")
-                        print(f"[数据] {name}失败: {err}")
-                except Exception as e:
-                    errors.append(str(e))
-        except concurrent.futures.TimeoutError:
-            errors.append("并行获取超时(15s)")
-            for f in futures:
-                if f.done():
-                    try:
-                        name, df, err = f.result()
-                        if df is not None and not df.empty:
-                            print(f"[数据] {code} 从{name}获取 {len(df)} 条")
-                            return df
-                    except Exception:
-                        pass
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+            df = _fetch_via_yahoo(code, days)
+            if not df.empty:
+                print(f"[数据] {code} 从Yahoo获取 {len(df)} 条 ({time.time()-_start:.1f}s)")
+                return df
+        except Exception as e:
+            errors.append(f"Yahoo: {e}")
+            print(f"[数据] Yahoo失败 ({time.time()-_start:.1f}s): {e}")
 
-    # 阶段2: 新浪兜底（最多8秒）
-    try:
-        df = _fetch_via_sina(code, min(days, 800))
-        if not df.empty:
-            print(f"[数据] {code} 从新浪获取 {len(df)} 条")
-            return df
-    except Exception as e:
-        errors.append(f"新浪: {e}")
-        print(f"[数据] 新浪失败: {e}")
+    # 3. 新浪财经（国内源，海外可能不通）
+    if time.time() - _start < _deadline:
+        try:
+            df = _fetch_via_sina(code, min(days, 800))
+            if not df.empty:
+                print(f"[数据] {code} 从新浪获取 {len(df)} 条 ({time.time()-_start:.1f}s)")
+                return df
+        except Exception as e:
+            errors.append(f"新浪: {e}")
+            print(f"[数据] 新浪失败 ({time.time()-_start:.1f}s): {e}")
 
     raise Exception("所有数据源均不可用: " + "; ".join(errors))
 
@@ -1087,10 +1046,30 @@ def health_check():
     """健康检查接口"""
     return jsonify({
         "status": "ok",
-        "version": "3source-parallel",
+        "version": "sequential-v4",
         "twelvedata": "configured" if os.environ.get("TWELVEDATA_API_KEY") else "not_set",
         "time": datetime.now().isoformat(),
     })
+
+
+@app.route("/api/debug/sources/<code>")
+def debug_sources(code):
+    """调试接口：逐个测试每个数据源，返回结果（不超时）"""
+    results = {}
+
+    def _test(name, fn, *args):
+        t = time.time()
+        try:
+            df = fn(*args)
+            return {"status": "ok", "rows": len(df), "time": f"{time.time()-t:.1f}s"}
+        except Exception as e:
+            return {"status": "fail", "error": str(e)[:100], "time": f"{time.time()-t:.1f}s"}
+
+    results["twelvedata"] = _test("twelvedata", _fetch_via_twelvedata, code, 365)
+    results["yahoo"] = _test("yahoo", _fetch_via_yahoo, code, 365)
+    results["sina"] = _test("sina", _fetch_via_sina, code, 800)
+
+    return jsonify(results)
 
 
 @app.route("/api/search")
