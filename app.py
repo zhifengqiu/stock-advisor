@@ -12,6 +12,11 @@ import traceback
 from datetime import datetime, timedelta
 from functools import lru_cache
 
+# SSL 证书修复（解决海外环境证书验证失败）
+import certifi
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
 import numpy as np
 import pandas as pd
 from flask import Flask, render_template, jsonify, request
@@ -837,6 +842,49 @@ def _fetch_via_sina(code, datalen=800):
     return pd.DataFrame(rows)
 
 
+def _fetch_via_baostock(code, days=3650):
+    """通过 BaoStock 获取K线数据（海外首选，自有服务器，不受GFW影响）"""
+    import baostock as bs
+
+    if code.startswith(("6", "9")):
+        bs_code = f"sh.{code}"
+    else:
+        bs_code = f"sz.{code}"
+
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    lg = bs.login()
+    if lg.error_code != "0":
+        raise Exception(f"BaoStock login failed: {lg.error_msg}")
+
+    try:
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,open,high,low,close,volume",
+            start_date=start_date, end_date=end_date,
+            frequency="d", adjustflag="2",  # 前复权
+        )
+        rows = []
+        while rs.error_code == "0" and rs.next():
+            row = rs.get_row_data()
+            try:
+                rows.append({
+                    "date": row[0],
+                    "open": float(row[1]),
+                    "close": float(row[4]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "volume": float(row[5]),
+                })
+            except (ValueError, IndexError):
+                continue
+    finally:
+        bs.logout()
+
+    return pd.DataFrame(rows)
+
+
 def _fetch_via_akshare(code, days=365):
     """通过 akshare (东财) 获取K线数据（主数据源）"""
     import akshare as ak
@@ -868,10 +916,20 @@ def _fetch_via_akshare(code, days=365):
 
 
 def fetch_stock_data(code, days=3650):
-    """获取股票历史数据（默认拉取10年全量） — 优先东财，失败则走新浪"""
+    """获取股票历史数据 — BaoStock(海外首选) → 东财 → 新浪，三级兜底"""
     errors = []
 
-    # 数据源1: akshare (东财)
+    # 数据源1: BaoStock（自有服务器，海外可用，无GFW问题）
+    try:
+        df = _fetch_via_baostock(code, days)
+        if not df.empty:
+            print(f"[数据] {code} 从BaoStock获取 {len(df)} 条")
+            return df
+    except Exception as e:
+        errors.append(f"BaoStock: {e}")
+        print(f"[数据] BaoStock失败: {e}")
+
+    # 数据源2: akshare (东财) — 国内首选
     try:
         df = _fetch_via_akshare(code, days)
         if not df.empty:
@@ -881,12 +939,13 @@ def fetch_stock_data(code, days=3650):
         errors.append(f"东财: {e}")
         print(f"[数据] 东财失败: {e}")
 
-    # 数据源2: 新浪财经（最多800条日线）
+    # 数据源3: 新浪财经
     try:
         datalen = min(days, 800)
         df = _fetch_via_sina(code, datalen)
         if not df.empty:
             print(f"[数据] {code} 从新浪获取 {len(df)} 条")
+            return df
             return df
     except Exception as e:
         errors.append(f"新浪: {e}")
