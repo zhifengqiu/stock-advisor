@@ -842,45 +842,66 @@ def _fetch_via_sina(code, datalen=800):
     return pd.DataFrame(rows)
 
 
-def _fetch_via_baostock(code, days=3650):
-    """通过 BaoStock 获取K线数据（海外首选，自有服务器，不受GFW影响）"""
-    import baostock as bs
+def _fetch_via_yahoo(code, days=365):
+    """通过 Yahoo Finance Chart API 获取K线数据（全球CDN，海外首选）"""
+    import requests as req
 
+    # 转换代码格式：600519 → 600519.SS，002384 → 002384.SZ
     if code.startswith(("6", "9")):
-        bs_code = f"sh.{code}"
+        ticker = f"{code}.SS"
+    elif code.startswith("8") or code.startswith("4"):
+        ticker = f"{code}.BJ"
     else:
-        bs_code = f"sz.{code}"
+        ticker = f"{code}.SZ"
 
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # 将天数转换为 Yahoo range 参数
+    if days >= 3650:
+        yrange = "10y"
+    elif days >= 1825:
+        yrange = "5y"
+    elif days >= 730:
+        yrange = "2y"
+    elif days >= 365:
+        yrange = "1y"
+    elif days >= 180:
+        yrange = "6mo"
+    elif days >= 90:
+        yrange = "3mo"
+    else:
+        yrange = "1mo"
 
-    lg = bs.login()
-    if lg.error_code != "0":
-        raise Exception(f"BaoStock login failed: {lg.error_msg}")
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {"range": yrange, "interval": "1d"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"}
 
-    try:
-        rs = bs.query_history_k_data_plus(
-            bs_code,
-            "date,open,high,low,close,volume",
-            start_date=start_date, end_date=end_date,
-            frequency="d", adjustflag="2",  # 前复权
-        )
-        rows = []
-        while rs.error_code == "0" and rs.next():
-            row = rs.get_row_data()
-            try:
-                rows.append({
-                    "date": row[0],
-                    "open": float(row[1]),
-                    "close": float(row[4]),
-                    "high": float(row[2]),
-                    "low": float(row[3]),
-                    "volume": float(row[5]),
-                })
-            except (ValueError, IndexError):
+    resp = req.get(url, params=params, headers=headers, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    result = data.get("chart", {}).get("result", [])
+    if not result:
+        raise Exception(f"Yahoo Finance 返回空数据 ({ticker})")
+
+    timestamps = result[0].get("timestamp", [])
+    quote = result[0].get("indicators", {}).get("quote", [{}])[0]
+
+    rows = []
+    for i, ts in enumerate(timestamps):
+        try:
+            d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            close_val = quote["close"][i]
+            if close_val is None:
                 continue
-    finally:
-        bs.logout()
+            rows.append({
+                "date": d,
+                "open": float(quote["open"][i] or 0),
+                "close": float(close_val),
+                "high": float(quote["high"][i] or 0),
+                "low": float(quote["low"][i] or 0),
+                "volume": float(quote["volume"][i] or 0),
+            })
+        except (TypeError, ValueError, IndexError):
+            continue
 
     return pd.DataFrame(rows)
 
@@ -916,18 +937,18 @@ def _fetch_via_akshare(code, days=365):
 
 
 def fetch_stock_data(code, days=3650):
-    """获取股票历史数据 — BaoStock(海外首选) → 东财 → 新浪，三级兜底"""
+    """获取股票历史数据 — Yahoo(海外首选) → 东财 → 新浪，三级兜底"""
     errors = []
 
-    # 数据源1: BaoStock（自有服务器，海外可用，无GFW问题）
+    # 数据源1: Yahoo Finance Chart API（全球CDN，海外首选）
     try:
-        df = _fetch_via_baostock(code, days)
+        df = _fetch_via_yahoo(code, days)
         if not df.empty:
-            print(f"[数据] {code} 从BaoStock获取 {len(df)} 条")
+            print(f"[数据] {code} 从Yahoo获取 {len(df)} 条")
             return df
     except Exception as e:
-        errors.append(f"BaoStock: {e}")
-        print(f"[数据] BaoStock失败: {e}")
+        errors.append(f"Yahoo: {e}")
+        print(f"[数据] Yahoo失败: {e}")
 
     # 数据源2: akshare (东财) — 国内首选
     try:

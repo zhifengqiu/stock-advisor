@@ -1,6 +1,5 @@
 flask>=3.0
 akshare>=1.14
-baostock>=0.8.9
 pandas>=2.0
 numpy>=1.24
 pypinyin>=0.55
