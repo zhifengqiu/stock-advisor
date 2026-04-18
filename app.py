@@ -28,7 +28,7 @@ app = Flask(__name__)
 # ============================================================
 
 def _ak_call(fn, *args, retries=3, delay=2, **kwargs):
-    """带重试 + 指数退避的 akshare 调用（海外部署自动降频）"""
+    """带重试 + 指数退避的 akshare 调用"""
     last_err = None
     for attempt in range(retries):
         try:
@@ -750,9 +750,6 @@ def analyze_news_sentiment(code, stock_name):
     except Exception as e:
         print(f"[消息面] 市值获取失败: {e}")
 
-    except Exception as e:
-        print(f"[消息面] 基本面数据获取失败: {e}")
-
     gc.collect()
 
     # --- 个股新闻（轻量，仅取5条） ---
@@ -813,9 +810,9 @@ def _fetch_via_sina(code, datalen=800):
         "Referer": "https://finance.sina.com.cn/",
     }
 
-    for attempt in range(3):
+    for attempt in range(1):
         try:
-            resp = req.get(url, params=params, headers=headers, timeout=10)
+            resp = req.get(url, params=params, headers=headers, timeout=8)
             resp.raise_for_status()
             break
         except Exception as e:
@@ -874,7 +871,7 @@ def _fetch_via_yahoo(code, days=365):
     params = {"range": yrange, "interval": "1d"}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"}
 
-    resp = req.get(url, params=params, headers=headers, timeout=15)
+    resp = req.get(url, params=params, headers=headers, timeout=10)
     resp.raise_for_status()
     data = resp.json()
 
@@ -907,26 +904,34 @@ def _fetch_via_yahoo(code, days=365):
 
 
 def _fetch_via_akshare(code, days=365):
-    """通过 akshare (东财) 获取K线数据（主数据源）"""
+    """通过 akshare (东财) 获取K线数据（带超时保护）"""
     import akshare as ak
+    import concurrent.futures
+
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
-    df = _ak_call(
-        ak.stock_zh_a_hist,
-        symbol=code,
-        period="daily",
-        start_date=start_date,
-        end_date=end_date,
-        adjust="qfq",
+    # akshare 无 timeout 参数，用线程池强制10秒超时
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(
+        lambda: ak.stock_zh_a_hist(
+            symbol=code, period="daily",
+            start_date=start_date, end_date=end_date, adjust="qfq"
+        )
     )
+    try:
+        raw_df = future.result(timeout=10)
+    except concurrent.futures.TimeoutError:
+        raise Exception("东财API超时(10s)")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     col_map = {
         "日期": "date", "开盘": "open", "收盘": "close",
         "最高": "high", "最低": "low", "成交量": "volume",
         "成交额": "amount", "涨跌幅": "change_pct",
     }
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    df = raw_df.rename(columns={k: v for k, v in col_map.items() if k in raw_df.columns})
 
     for col in ["open", "close", "high", "low", "volume"]:
         if col in df.columns:
@@ -937,36 +942,58 @@ def _fetch_via_akshare(code, days=365):
 
 
 def fetch_stock_data(code, days=3650):
-    """获取股票历史数据 — Yahoo(海外首选) → 东财 → 新浪，三级兜底"""
+    """获取股票历史数据 — Yahoo+东财并行(15s) → 新浪兜底(8s)，总计最多23秒"""
+    import concurrent.futures
+
     errors = []
 
-    # 数据源1: Yahoo Finance Chart API（全球CDN，海外首选）
-    try:
-        df = _fetch_via_yahoo(code, days)
-        if not df.empty:
-            print(f"[数据] {code} 从Yahoo获取 {len(df)} 条")
-            return df
-    except Exception as e:
-        errors.append(f"Yahoo: {e}")
-        print(f"[数据] Yahoo失败: {e}")
+    def _safe(name, fn, *args):
+        """包装数据源调用，返回 (name, df_or_None, error_str_or_None)"""
+        try:
+            df = fn(*args)
+            return (name, df, None)
+        except Exception as e:
+            return (name, None, str(e))
 
-    # 数据源2: akshare (东财) — 国内首选
+    # 阶段1: Yahoo + akshare 并行（最多15秒）
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     try:
-        df = _fetch_via_akshare(code, days)
-        if not df.empty:
-            print(f"[数据] {code} 从东财获取 {len(df)} 条")
-            return df
-    except Exception as e:
-        errors.append(f"东财: {e}")
-        print(f"[数据] 东财失败: {e}")
+        futures = [
+            pool.submit(_safe, "Yahoo", _fetch_via_yahoo, code, days),
+            pool.submit(_safe, "东财", _fetch_via_akshare, code, days),
+        ]
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=15):
+                try:
+                    name, df, err = future.result()
+                    if df is not None and not df.empty:
+                        print(f"[数据] {code} 从{name}获取 {len(df)} 条")
+                        return df
+                    if err:
+                        errors.append(f"{name}: {err}")
+                        print(f"[数据] {name}失败: {err}")
+                except Exception as e:
+                    errors.append(str(e))
+        except concurrent.futures.TimeoutError:
+            errors.append("并行获取超时(15s)")
+            # 检查是否有已完成的
+            for f in futures:
+                if f.done():
+                    try:
+                        name, df, err = f.result()
+                        if df is not None and not df.empty:
+                            print(f"[数据] {code} 从{name}获取 {len(df)} 条")
+                            return df
+                    except Exception:
+                        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
-    # 数据源3: 新浪财经
+    # 阶段2: 新浪兜底（最多8秒）
     try:
-        datalen = min(days, 800)
-        df = _fetch_via_sina(code, datalen)
+        df = _fetch_via_sina(code, min(days, 800))
         if not df.empty:
             print(f"[数据] {code} 从新浪获取 {len(df)} 条")
-            return df
             return df
     except Exception as e:
         errors.append(f"新浪: {e}")
@@ -982,6 +1009,12 @@ def fetch_stock_data(code, days=3650):
 @app.route("/")
 def index():
     return render_template("index.html", v=int(time.time()))
+
+
+@app.route("/api/health")
+def health_check():
+    """健康检查接口"""
+    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
 
 
 @app.route("/api/search")
