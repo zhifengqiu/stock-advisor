@@ -43,8 +43,8 @@ async function fetchSuggestions(q, container) {
     }
     try {
         const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-        const data = await resp.json();
-        if (!data.length) {
+        const data = await resp.json().catch(() => []);
+        if (!data || !data.length) {
             container.classList.add("hidden");
             return;
         }
@@ -106,8 +106,8 @@ async function resolveAndLoad(rawInput) {
 
     try {
         const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-        const results = await resp.json();
-        if (results.length === 0) {
+        const results = await resp.json().catch(() => []);
+        if (!results || results.length === 0) {
             klineChart.hideLoading();
             document.getElementById("signalsList").innerHTML = `<div class="loading-text">未找到匹配的股票</div>`;
             document.getElementById("newsList").innerHTML = `<div class="loading-text">未找到</div>`;
@@ -185,11 +185,21 @@ async function loadStock(code) {
     try {
         // 加载图表 + 技术分析
         const resp = await fetch(`/api/stock/${code}`);
-        if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.error || "请求失败");
+        const text = await resp.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch {
+            throw new Error(
+                resp.status === 502 || resp.status === 503
+                    ? "服务器正在唤醒，请等待30秒后重试"
+                    : "服务器响应超时，请稍后重试"
+            );
         }
-        allData = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.error || "请求失败");
+        }
+        allData = data;
         currentName = allData.name;
 
         // 更新顶部信息
@@ -223,7 +233,14 @@ async function loadNewsSentiment(code) {
 
     try {
         const resp = await fetch(`/api/stock/${code}/news`);
-        const data = await resp.json();
+        const text = await resp.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch {
+            newsList.innerHTML = `<div class="loading-text">消息面数据暂时不可用</div>`;
+            return;
+        }
         if (data.error && !data.points) {
             newsList.innerHTML = `<div class="loading-text">${data.error}</div>`;
             return;
