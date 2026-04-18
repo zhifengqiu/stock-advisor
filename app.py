@@ -699,56 +699,51 @@ def analyze_news_sentiment(code, stock_name):
     points = []
     score = 0.0
 
-    # --- 基本面数据：单股指标查询（轻量） ---
+    # --- 基本面数据：百度估值（全球CDN，海外可访问） ---
     try:
         import akshare as ak
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
-        indicator_df = _ak_call(
-            ak.stock_a_indicator_lg,
-            symbol=code, start_date=start_date, end_date=end_date,
+        pe_df = _ak_call(
+            ak.stock_zh_valuation_baidu,
+            symbol=code, indicator="市盈率(TTM)", period="近一年",
             retries=1, delay=2
         )
-        if indicator_df is not None and not indicator_df.empty:
-            row = indicator_df.iloc[-1]
-
-            pe = safe_val(row.get("pe"), None)
-            pb = safe_val(row.get("pb"), None)
-            total_mv = safe_val(row.get("total_mv"), None)
-
+        if pe_df is not None and not pe_df.empty:
+            pe = safe_val(pe_df.iloc[-1]["value"], None)
             if pe is not None and pe > 0:
                 if pe < 15:
-                    points.append({"text": f"市盈率{pe:.1f}倍，估值偏低", "bias": "positive"})
+                    points.append({"text": f"市盈率(TTM){pe:.1f}倍，估值偏低", "bias": "positive"})
                     score += 0.5
                 elif pe < 30:
-                    points.append({"text": f"市盈率{pe:.1f}倍，估值适中", "bias": "neutral"})
+                    points.append({"text": f"市盈率(TTM){pe:.1f}倍，估值适中", "bias": "neutral"})
                 elif pe < 60:
-                    points.append({"text": f"市盈率{pe:.1f}倍，估值偏高", "bias": "negative"})
+                    points.append({"text": f"市盈率(TTM){pe:.1f}倍，估值偏高", "bias": "negative"})
                     score -= 0.3
                 else:
-                    points.append({"text": f"市盈率{pe:.1f}倍，估值过高", "bias": "negative"})
+                    points.append({"text": f"市盈率(TTM){pe:.1f}倍，估值过高", "bias": "negative"})
                     score -= 0.5
+        del pe_df
+    except Exception as e:
+        print(f"[消息面] PE获取失败: {e}")
 
-            if pb is not None and pb > 0:
-                if pb < 1:
-                    points.append({"text": f"市净率{pb:.1f}倍，破净边缘", "bias": "positive"})
-                    score += 0.5
-                elif pb < 3:
-                    points.append({"text": f"市净率{pb:.1f}倍，处于合理区间", "bias": "neutral"})
+    try:
+        import akshare as ak
+        mv_df = _ak_call(
+            ak.stock_zh_valuation_baidu,
+            symbol=code, indicator="总市值", period="近一年",
+            retries=1, delay=2
+        )
+        if mv_df is not None and not mv_df.empty:
+            mv = safe_val(mv_df.iloc[-1]["value"], None)
+            if mv and mv > 0:
+                if mv > 1000:
+                    points.append({"text": f"总市值{mv:.0f}亿，大盘蓝筹", "bias": "neutral"})
+                elif mv > 200:
+                    points.append({"text": f"总市值{mv:.0f}亿，中盘股", "bias": "neutral"})
                 else:
-                    points.append({"text": f"市净率{pb:.1f}倍，溢价较高", "bias": "negative"})
-                    score -= 0.3
-
-            if total_mv is not None and total_mv > 0:
-                mv_yi = total_mv / 1e8
-                if mv_yi > 1000:
-                    points.append({"text": f"总市值{mv_yi:.0f}亿，大盘蓝筹", "bias": "neutral"})
-                elif mv_yi > 200:
-                    points.append({"text": f"总市值{mv_yi:.0f}亿，中盘股", "bias": "neutral"})
-                else:
-                    points.append({"text": f"总市值{mv_yi:.0f}亿，小盘股", "bias": "neutral"})
-
-        del indicator_df
+                    points.append({"text": f"总市值{mv:.0f}亿，小盘股", "bias": "neutral"})
+        del mv_df
+    except Exception as e:
+        print(f"[消息面] 市值获取失败: {e}")
 
     except Exception as e:
         print(f"[消息面] 基本面数据获取失败: {e}")
@@ -962,14 +957,13 @@ def search_stock():
 
 @app.route("/api/stock/<code>")
 def get_stock_analysis(code):
-    """获取股票完整分析数据"""
+    """获取股票技术分析 + 图表数据（快速，不含消息面）"""
     try:
-        # 验证代码
         code = code.strip()
         if not code.isdigit() or len(code) != 6:
             return jsonify({"error": "请输入6位股票代码"}), 400
 
-        # 获取数据
+        # 获取K线数据
         df = fetch_stock_data(code)
         if df.empty:
             return jsonify({"error": "未找到该股票数据"}), 404
@@ -982,21 +976,15 @@ def get_stock_analysis(code):
                 stock_name = s["name"]
                 break
 
-        # 技术分析
+        # 技术分析（纯计算，快速）
         analyzer = StockAnalyzer(df)
-        # 原始 df 不再需要，释放内存
         del df
         gc.collect()
 
-        # 各策略推荐
         short_rec = analyzer.get_recommendation("short")
         medium_rec = analyzer.get_recommendation("medium")
         long_rec = analyzer.get_recommendation("long")
 
-        # 消息面
-        news_sentiment = analyze_news_sentiment(code, stock_name)
-
-        # 图表数据
         chart_data = analyzer.get_chart_data()
         del analyzer
         gc.collect()
@@ -1009,13 +997,35 @@ def get_stock_analysis(code):
                 "short": short_rec,
                 "medium": medium_rec,
                 "long": long_rec
-            },
-            "news_sentiment": news_sentiment
+            }
         })
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"分析失败: {str(e)}"}), 500
+
+
+@app.route("/api/stock/<code>/news")
+def get_stock_news(code):
+    """获取股票消息面分析（独立接口，可慢可失败）"""
+    try:
+        code = code.strip()
+        if not code.isdigit() or len(code) != 6:
+            return jsonify({"error": "无效代码"}), 400
+
+        stock_name = code
+        stocks = get_stock_list()
+        for s in stocks:
+            if s["code"] == code:
+                stock_name = s["name"]
+                break
+
+        news_sentiment = analyze_news_sentiment(code, stock_name)
+        return jsonify(news_sentiment)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"消息面获取失败: {str(e)}", "score": 0, "points": []}), 200
 
 
 # ============================================================

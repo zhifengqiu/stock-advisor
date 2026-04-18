@@ -130,6 +130,7 @@ async function loadStock(code) {
     showLoading(true);
 
     try {
+        // 第一步：加载图表 + 技术分析（快速）
         const resp = await fetch(`/api/stock/${code}`);
         if (!resp.ok) {
             const err = await resp.json();
@@ -150,16 +151,58 @@ async function loadStock(code) {
         document.getElementById("chartTitle").innerHTML =
             `<span class="chart-title-name">${currentName}</span><span class="chart-title-code">${currentCode}</span>`;
 
-        // 初始化图表
+        // 初始化图表（立即显示）
         initChart();
 
-        // 渲染推荐
+        // 渲染技术面推荐（立即显示）
         updateRecommendation();
 
-    } catch (e) {
-        alert("分析失败: " + e.message);
-    } finally {
         showLoading(false);
+
+        // 第二步：异步加载消息面（慢，不阻塞页面）
+        loadNewsSentiment(code);
+
+    } catch (e) {
+        showLoading(false);
+        alert("分析失败: " + e.message);
+    }
+}
+
+async function loadNewsSentiment(code) {
+    const newsList = document.getElementById("newsList");
+    newsList.innerHTML = `<div class="loading-text">正在分析消息面...</div>`;
+
+    try {
+        const resp = await fetch(`/api/stock/${code}/news`);
+        const data = await resp.json();
+        if (data.error && !data.points) {
+            newsList.innerHTML = `<div class="loading-text">${data.error}</div>`;
+            return;
+        }
+        // 存储到 allData 供策略切换时使用
+        allData.news_sentiment = data;
+        // 重新渲染消息面
+        updateNewsPanel(data);
+    } catch (e) {
+        newsList.innerHTML = `<div class="loading-text">消息面数据暂时不可用</div>`;
+    }
+}
+
+function updateNewsPanel(sentiment) {
+    const newsList = document.getElementById("newsList");
+    if (sentiment.points && sentiment.points.length > 0) {
+        newsList.innerHTML = sentiment.points.map(p => {
+            const icon = p.bias === "positive" ? "+" : p.bias === "negative" ? "-" : "=";
+            const action = p.bias === "positive" ? "buy" : p.bias === "negative" ? "sell" : "hold";
+            return `<div class="signal-item ${action}">
+                <span class="signal-icon">${icon}</span>
+                <div class="signal-content">
+                    <span class="signal-name">${p.text}</span>
+                </div>
+            </div>`;
+        }).join("");
+    } else {
+        newsList.innerHTML = `<div class="loading-text">暂无消息面数据</div>`;
     }
 }
 
@@ -387,7 +430,6 @@ function updateRecommendation() {
     if (!allData) return;
 
     const rec = allData.recommendations[currentStrategy];
-    const sentiment = allData.news_sentiment;
 
     // 核心建议
     const recText = document.getElementById("recText");
@@ -423,21 +465,9 @@ function updateRecommendation() {
         signalsList.innerHTML = `<div class="loading-text">暂无明确信号</div>`;
     }
 
-    // 消息面
-    const newsList = document.getElementById("newsList");
-    if (sentiment.points && sentiment.points.length > 0) {
-        newsList.innerHTML = sentiment.points.map(p => {
-            const icon = p.bias === "positive" ? "+" : p.bias === "negative" ? "-" : "=";
-            const action = p.bias === "positive" ? "buy" : p.bias === "negative" ? "sell" : "hold";
-            return `<div class="signal-item ${action}">
-                <span class="signal-icon">${icon}</span>
-                <div class="signal-content">
-                    <span class="signal-name">${p.text}</span>
-                </div>
-            </div>`;
-        }).join("");
-    } else {
-        newsList.innerHTML = `<div class="loading-text">暂无消息面数据</div>`;
+    // 消息面（如果已加载则渲染，否则保持"正在分析"状态）
+    if (allData.news_sentiment) {
+        updateNewsPanel(allData.news_sentiment);
     }
 }
 
