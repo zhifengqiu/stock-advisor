@@ -7,4 +7,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.6"
+      - key: TWELVEDATA_API_KEY
+        sync: false  # 在 Render 控制台手动设置
     plan: free

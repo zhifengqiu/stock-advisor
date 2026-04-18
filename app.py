@@ -840,7 +840,7 @@ def _fetch_via_sina(code, datalen=800):
 
 
 def _fetch_via_yahoo(code, days=365):
-    """通过 Yahoo Finance Chart API 获取K线数据（全球CDN，海外首选）"""
+    """通过 Yahoo Finance Chart API 获取K线数据（用 Session 绕过认证限制）"""
     import requests as req
 
     # 转换代码格式：600519 → 600519.SS，002384 → 002384.SZ
@@ -867,11 +867,24 @@ def _fetch_via_yahoo(code, days=365):
     else:
         yrange = "1mo"
 
+    # 用 Session 获取 cookie → crumb → 数据（绕过 403 限制）
+    s = req.Session()
+    s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                     "AppleWebKit/537.36 Chrome/120.0.0.0"})
+    s.get("https://finance.yahoo.com/", timeout=8)
+
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
     params = {"range": yrange, "interval": "1d"}
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"}
 
-    resp = req.get(url, params=params, headers=headers, timeout=10)
+    # 尝试获取 crumb（可选，即使失败也继续）
+    try:
+        crumb_resp = s.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=5)
+        if crumb_resp.ok and crumb_resp.text.strip():
+            params["crumb"] = crumb_resp.text.strip()
+    except Exception:
+        pass
+
+    resp = s.get(url, params=params, timeout=10)
     resp.raise_for_status()
     data = resp.json()
 
@@ -900,6 +913,64 @@ def _fetch_via_yahoo(code, days=365):
         except (TypeError, ValueError, IndexError):
             continue
 
+    return pd.DataFrame(rows)
+
+
+def _fetch_via_twelvedata(code, days=365):
+    """通过 Twelve Data API 获取K线数据（全球CDN，海外首选，免费800次/天）"""
+    import requests as req
+
+    apikey = os.environ.get("TWELVEDATA_API_KEY", "demo")
+    if apikey == "demo":
+        raise Exception("未配置 Twelve Data API key")
+
+    # 确定交易所
+    if code.startswith(("6", "9")):
+        exchange = "SSE"   # 上交所
+    elif code.startswith("8") or code.startswith("4"):
+        exchange = "BSE"   # 北交所
+    else:
+        exchange = "SZSE"  # 深交所
+
+    outputsize = min(days, 5000)
+
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": code,
+        "exchange": exchange,
+        "interval": "1day",
+        "outputsize": outputsize,
+        "format": "JSON",
+        "apikey": apikey,
+    }
+
+    resp = req.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if data.get("status") == "error":
+        raise Exception(f"Twelve Data: {data.get('message', '未知错误')}")
+
+    values = data.get("values", [])
+    if not values:
+        raise Exception(f"Twelve Data 返回空数据 ({code})")
+
+    rows = []
+    for v in values:
+        try:
+            rows.append({
+                "date": v["datetime"][:10],
+                "open": float(v["open"]),
+                "close": float(v["close"]),
+                "high": float(v["high"]),
+                "low": float(v["low"]),
+                "volume": float(v.get("volume") or 0),
+            })
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    # Twelve Data 返回最新的在前，需反转
+    rows.reverse()
     return pd.DataFrame(rows)
 
 
@@ -942,7 +1013,7 @@ def _fetch_via_akshare(code, days=365):
 
 
 def fetch_stock_data(code, days=3650):
-    """获取股票历史数据 — Yahoo+东财并行(15s) → 新浪兜底(8s)，总计最多23秒"""
+    """获取股票历史数据 — 三源并行(15s) → 新浪兜底(8s)"""
     import concurrent.futures
 
     errors = []
@@ -955,10 +1026,11 @@ def fetch_stock_data(code, days=3650):
         except Exception as e:
             return (name, None, str(e))
 
-    # 阶段1: Yahoo + akshare 并行（最多15秒）
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    # 阶段1: Yahoo + TwelveData + akshare 三源并行（最多15秒）
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     try:
         futures = [
+            pool.submit(_safe, "TwelveData", _fetch_via_twelvedata, code, days),
             pool.submit(_safe, "Yahoo", _fetch_via_yahoo, code, days),
             pool.submit(_safe, "东财", _fetch_via_akshare, code, days),
         ]
@@ -976,7 +1048,6 @@ def fetch_stock_data(code, days=3650):
                     errors.append(str(e))
         except concurrent.futures.TimeoutError:
             errors.append("并行获取超时(15s)")
-            # 检查是否有已完成的
             for f in futures:
                 if f.done():
                     try:
@@ -1014,7 +1085,12 @@ def index():
 @app.route("/api/health")
 def health_check():
     """健康检查接口"""
-    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+    return jsonify({
+        "status": "ok",
+        "version": "3source-parallel",
+        "twelvedata": "configured" if os.environ.get("TWELVEDATA_API_KEY") else "not_set",
+        "time": datetime.now().isoformat(),
+    })
 
 
 @app.route("/api/search")
