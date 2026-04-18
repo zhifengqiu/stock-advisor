@@ -4,6 +4,7 @@
 提供短线/中线/长线操作建议
 """
 
+import gc
 import os
 import json
 import time
@@ -22,7 +23,7 @@ app = Flask(__name__)
 # ============================================================
 
 def _ak_call(fn, *args, retries=3, delay=2, **kwargs):
-    """带重试 + 指数退避的 akshare 调用"""
+    """带重试 + 指数退避的 akshare 调用（海外部署自动降频）"""
     last_err = None
     for attempt in range(retries):
         try:
@@ -692,103 +693,90 @@ class StockAnalyzer:
 
 def analyze_news_sentiment(code, stock_name):
     """
-    基于新闻和基本面数据给出消息面评估
+    基于新闻和基本面数据给出消息面评估（内存优化版）
+    使用单股查询代替全市场行情，避免 OOM
     """
     points = []
     score = 0.0
 
-    # --- 基本面数据：从东财实时行情获取 ---
+    # --- 基本面数据：单股指标查询（轻量） ---
     try:
         import akshare as ak
-        try:
-            spot_df = _ak_call(ak.stock_zh_a_spot_em, retries=2, delay=3)
-        except Exception:
-            spot_df = pd.DataFrame()
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        indicator_df = _ak_call(
+            ak.stock_a_indicator_lg,
+            symbol=code, start_date=start_date, end_date=end_date,
+            retries=1, delay=2
+        )
+        if indicator_df is not None and not indicator_df.empty:
+            row = indicator_df.iloc[-1]
 
-        if not spot_df.empty:
-            stock_row = spot_df[spot_df["代码"] == code]
-            if not stock_row.empty:
-                row = stock_row.iloc[0]
-                pe = safe_val(row.get("市盈率-动态"), None)
-                pb = safe_val(row.get("市净率"), None)
-                total_mv = row.get("总市值", "")
-                turnover = safe_val(row.get("换手率"), None)
-                ytd_change = safe_val(row.get("年初至今涨跌幅"), None)
+            pe = safe_val(row.get("pe"), None)
+            pb = safe_val(row.get("pb"), None)
+            total_mv = safe_val(row.get("total_mv"), None)
 
-                if pe is not None and pe > 0:
-                    if pe < 15:
-                        points.append({"text": f"市盈率(动){pe:.1f}倍，估值偏低", "bias": "positive"})
-                        score += 0.5
-                    elif pe < 30:
-                        points.append({"text": f"市盈率(动){pe:.1f}倍，估值适中", "bias": "neutral"})
-                    elif pe < 60:
-                        points.append({"text": f"市盈率(动){pe:.1f}倍，估值偏高", "bias": "negative"})
-                        score -= 0.3
-                    else:
-                        points.append({"text": f"市盈率(动){pe:.1f}倍，估值过高", "bias": "negative"})
-                        score -= 0.5
+            if pe is not None and pe > 0:
+                if pe < 15:
+                    points.append({"text": f"市盈率{pe:.1f}倍，估值偏低", "bias": "positive"})
+                    score += 0.5
+                elif pe < 30:
+                    points.append({"text": f"市盈率{pe:.1f}倍，估值适中", "bias": "neutral"})
+                elif pe < 60:
+                    points.append({"text": f"市盈率{pe:.1f}倍，估值偏高", "bias": "negative"})
+                    score -= 0.3
+                else:
+                    points.append({"text": f"市盈率{pe:.1f}倍，估值过高", "bias": "negative"})
+                    score -= 0.5
 
-                if pb is not None and pb > 0:
-                    if pb < 1:
-                        points.append({"text": f"市净率{pb:.1f}倍，破净边缘", "bias": "positive"})
-                        score += 0.5
-                    elif pb < 3:
-                        points.append({"text": f"市净率{pb:.1f}倍，处于合理区间", "bias": "neutral"})
-                    else:
-                        points.append({"text": f"市净率{pb:.1f}倍，溢价较高", "bias": "negative"})
-                        score -= 0.3
+            if pb is not None and pb > 0:
+                if pb < 1:
+                    points.append({"text": f"市净率{pb:.1f}倍，破净边缘", "bias": "positive"})
+                    score += 0.5
+                elif pb < 3:
+                    points.append({"text": f"市净率{pb:.1f}倍，处于合理区间", "bias": "neutral"})
+                else:
+                    points.append({"text": f"市净率{pb:.1f}倍，溢价较高", "bias": "negative"})
+                    score -= 0.3
 
-                if turnover is not None:
-                    if turnover > 10:
-                        points.append({"text": f"换手率{turnover:.1f}%，交投非常活跃", "bias": "neutral"})
-                    elif turnover > 5:
-                        points.append({"text": f"换手率{turnover:.1f}%，交投活跃", "bias": "neutral"})
-                    elif turnover < 1:
-                        points.append({"text": f"换手率{turnover:.1f}%，交投清淡", "bias": "negative"})
-                        score -= 0.2
+            if total_mv is not None and total_mv > 0:
+                mv_yi = total_mv / 1e8
+                if mv_yi > 1000:
+                    points.append({"text": f"总市值{mv_yi:.0f}亿，大盘蓝筹", "bias": "neutral"})
+                elif mv_yi > 200:
+                    points.append({"text": f"总市值{mv_yi:.0f}亿，中盘股", "bias": "neutral"})
+                else:
+                    points.append({"text": f"总市值{mv_yi:.0f}亿，小盘股", "bias": "neutral"})
 
-                if ytd_change is not None:
-                    if ytd_change > 30:
-                        points.append({"text": f"年初至今涨跌幅+{ytd_change:.1f}%，年内表现强劲", "bias": "positive"})
-                        score += 0.3
-                    elif ytd_change < -20:
-                        points.append({"text": f"年初至今涨跌幅{ytd_change:.1f}%，年内表现疲弱", "bias": "negative"})
-                        score -= 0.3
-
-                if total_mv:
-                    try:
-                        mv_float = float(total_mv)
-                        if mv_float > 1e11:
-                            points.append({"text": f"总市值{mv_float/1e8:.0f}亿，大盘蓝筹", "bias": "neutral"})
-                        elif mv_float > 2e10:
-                            points.append({"text": f"总市值{mv_float/1e8:.0f}亿，中盘股", "bias": "neutral"})
-                        else:
-                            points.append({"text": f"总市值{mv_float/1e8:.0f}亿，小盘股", "bias": "neutral"})
-                    except (ValueError, TypeError):
-                        pass
+        del indicator_df
 
     except Exception as e:
-        points.append({"text": f"基本面数据获取异常: {str(e)[:50]}", "bias": "neutral"})
+        print(f"[消息面] 基本面数据获取失败: {e}")
 
-    # 尝试获取个股新闻
+    gc.collect()
+
+    # --- 个股新闻（轻量，仅取5条） ---
     try:
         import akshare as ak
-        news_df = _ak_call(ak.stock_news_em, symbol=code)
+        news_df = _ak_call(ak.stock_news_em, symbol=code, retries=1, delay=2)
         if news_df is not None and not news_df.empty:
-            recent_news = news_df.head(5)
-            for _, nr in recent_news.iterrows():
+            for _, nr in news_df.head(5).iterrows():
                 title = str(nr.get("新闻标题", ""))
-                if title:
-                    bias = "neutral"
-                    if any(kw in title for kw in ["上涨", "涨停", "新高", "突破", "增长", "利好", "获批", "中标"]):
-                        bias = "positive"
-                        score += 0.2
-                    elif any(kw in title for kw in ["下跌", "跌停", "新低", "亏损", "减持", "处罚", "风险", "利空"]):
-                        bias = "negative"
-                        score -= 0.2
-                    points.append({"text": f"[新闻] {title[:40]}", "bias": bias, "is_news": True})
-    except Exception:
-        pass
+                if not title:
+                    continue
+                bias = "neutral"
+                if any(kw in title for kw in ["上涨", "涨停", "新高", "突破", "增长", "利好", "获批", "中标"]):
+                    bias = "positive"
+                    score += 0.2
+                elif any(kw in title for kw in ["下跌", "跌停", "新低", "亏损", "减持", "处罚", "风险", "利空"]):
+                    bias = "negative"
+                    score -= 0.2
+                points.append({"text": f"[新闻] {title[:40]}", "bias": bias, "is_news": True})
+        del news_df
+    except Exception as e:
+        print(f"[消息面] 新闻获取失败: {e}")
+
+    gc.collect()
 
     return {
         "score": round(score, 2),
@@ -827,7 +815,7 @@ def _fetch_via_sina(code, datalen=800):
 
     for attempt in range(3):
         try:
-            resp = req.get(url, params=params, headers=headers, timeout=15)
+            resp = req.get(url, params=params, headers=headers, timeout=10)
             resp.raise_for_status()
             break
         except Exception as e:
@@ -996,6 +984,9 @@ def get_stock_analysis(code):
 
         # 技术分析
         analyzer = StockAnalyzer(df)
+        # 原始 df 不再需要，释放内存
+        del df
+        gc.collect()
 
         # 各策略推荐
         short_rec = analyzer.get_recommendation("short")
@@ -1007,6 +998,8 @@ def get_stock_analysis(code):
 
         # 图表数据
         chart_data = analyzer.get_chart_data()
+        del analyzer
+        gc.collect()
 
         return jsonify({
             "code": code,
