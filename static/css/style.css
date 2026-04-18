@@ -1,0 +1,609 @@
+/* ============================================================
+   量化因子股票建议系统 - 暗色交易主题
+   ============================================================ */
+
+:root {
+    --bg-primary: #0a0e17;
+    --bg-secondary: #111827;
+    --bg-card: #1a2332;
+    --bg-hover: #243044;
+    --border: #2a3a50;
+    --text-primary: #e8edf5;
+    --text-secondary: #8899aa;
+    --text-muted: #5a6a7a;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --green: #22c55e;
+    --green-bg: rgba(34, 197, 94, 0.12);
+    --red: #ef4444;
+    --red-bg: rgba(239, 68, 68, 0.12);
+    --yellow: #f59e0b;
+    --yellow-bg: rgba(245, 158, 11, 0.12);
+    --radius: 10px;
+    --radius-sm: 6px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+/* ---- 隐藏工具类 ---- */
+.hidden { display: none !important; }
+
+/* ============================================================
+   首页搜索
+   ============================================================ */
+.landing {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.landing-content {
+    text-align: center;
+    max-width: 680px;
+    width: 100%;
+}
+
+.logo {
+    font-size: 52px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+    letter-spacing: 4px;
+}
+
+.tagline {
+    color: var(--text-secondary);
+    font-size: 16px;
+    margin-bottom: 40px;
+}
+
+.search-box-outer {
+    position: relative;
+    width: 100%;
+}
+
+.search-box {
+    display: flex;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 50px;
+    padding: 6px 8px 6px 20px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.search-box:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.search-icon {
+    width: 20px;
+    height: 20px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.search-box input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-size: 17px;
+    padding: 12px;
+    min-width: 0;
+}
+
+.search-box input::placeholder {
+    color: var(--text-muted);
+}
+
+.search-box button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 50px;
+    padding: 12px 32px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.search-box button:hover {
+    background: var(--accent-hover);
+}
+
+/* 搜索建议 */
+.suggestions {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    z-index: 100;
+    max-height: 360px;
+    overflow-y: auto;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.suggestion-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 20px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 14px;
+}
+
+.suggestion-item:hover {
+    background: var(--bg-hover);
+}
+
+.suggestion-code {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 15px;
+    min-width: 70px;
+}
+
+.suggestion-name {
+    color: var(--text-primary);
+    font-size: 15px;
+}
+
+/* 热门标签 */
+.hot-tags {
+    margin-top: 24px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.hot-tags a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    margin: 0 8px;
+    transition: color 0.2s;
+}
+
+.hot-tags a:hover {
+    color: var(--accent);
+}
+
+/* ============================================================
+   分析页面
+   ============================================================ */
+.main-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 顶栏 */
+.top-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px 24px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    gap: 24px;
+    flex-shrink: 0;
+}
+
+.top-logo {
+    font-size: 20px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.top-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0;
+}
+
+.top-search input {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-right: none;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    padding: 8px 14px;
+    color: var(--text-primary);
+    font-size: 14px;
+    outline: none;
+    width: 260px;
+}
+
+.top-search input:focus {
+    border-color: var(--accent);
+}
+
+.top-search button {
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 8px 18px;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.top-suggestions {
+    top: calc(100% + 2px);
+    left: 0;
+    width: 340px;
+}
+
+.stock-info {
+    margin-left: auto;
+    font-size: 15px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.stock-info .name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 17px;
+}
+
+.stock-info .code-label {
+    color: var(--text-muted);
+    margin-left: 6px;
+}
+
+/* 主内容区 */
+.content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* ---- 左侧图表 ---- */
+.chart-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+}
+
+.chart-tabs {
+    display: flex;
+    gap: 0;
+    padding: 0;
+}
+
+.chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.chart-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.chart-title-name {
+    color: var(--text-primary);
+}
+
+.chart-title-code {
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 400;
+    margin-left: 8px;
+}
+
+.chart-tab {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: 6px 18px;
+    cursor: pointer;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+}
+
+.chart-tab:hover { color: var(--text-primary); }
+.chart-tab.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+.chart-container {
+    flex: 1;
+    min-height: 500px;
+}
+
+/* ---- 右侧建议面板 ---- */
+.advisor-panel {
+    width: 380px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: var(--bg-primary);
+}
+
+/* 策略标签 */
+.strategy-tabs {
+    display: flex;
+    gap: 0;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 4px;
+}
+
+.strategy-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: 10px 0;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+}
+
+.strategy-tab:hover { color: var(--text-primary); }
+.strategy-tab.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* 推荐卡片 */
+.rec-card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 24px;
+    text-align: center;
+    border: 1px solid var(--border);
+}
+
+.rec-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.rec-text {
+    font-size: 36px;
+    font-weight: 800;
+    margin-bottom: 12px;
+}
+
+.rec-text.buy { color: var(--green); }
+.rec-text.sell { color: var(--red); }
+.rec-text.hold { color: var(--yellow); }
+
+.rec-meta {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.rec-meta b { color: var(--text-primary); }
+
+/* 评分条 */
+.score-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--bg-hover);
+    border-radius: 4px;
+    margin-top: 14px;
+    overflow: hidden;
+    position: relative;
+}
+
+.score-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+
+.score-fill.positive { background: linear-gradient(90deg, var(--green), #4ade80); }
+.score-fill.negative { background: linear-gradient(90deg, #f87171, var(--red)); }
+
+/* 关键价位 */
+.levels-card, .signals-card, .news-card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 16px;
+    border: 1px solid var(--border);
+}
+
+.levels-card h3, .signals-card h3, .news-card h3 {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    font-weight: 600;
+}
+
+.levels-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.level-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.level-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.level-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.level-value.green { color: var(--green); }
+.level-value.red { color: var(--red); }
+
+/* 信号列表 */
+.signals-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.signal-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.signal-item.buy {
+    background: var(--green-bg);
+    border-left: 3px solid var(--green);
+}
+
+.signal-item.sell {
+    background: var(--red-bg);
+    border-left: 3px solid var(--red);
+}
+
+.signal-item.hold {
+    background: var(--yellow-bg);
+    border-left: 3px solid var(--yellow);
+}
+
+.signal-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.signal-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.signal-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.signal-desc {
+    color: var(--text-secondary);
+    margin-top: 2px;
+    font-size: 12px;
+}
+
+/* 消息面列表 - 复用 signal-item 样式 */
+
+.loading-text {
+    color: var(--text-muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 20px;
+}
+
+/* ============================================================
+   加载遮罩
+   ============================================================ */
+.loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 14, 23, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.loading-overlay p {
+    margin-top: 16px;
+    color: var(--text-secondary);
+    font-size: 16px;
+}
+
+.spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   响应式
+   ============================================================ */
+@media (max-width: 1024px) {
+    .content {
+        flex-direction: column;
+    }
+    .advisor-panel {
+        width: 100%;
+        max-height: none;
+    }
+    .chart-panel {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+    .chart-container {
+        min-height: 400px;
+    }
+}
+
+@media (max-width: 640px) {
+    .logo { font-size: 36px; }
+    .top-bar { padding: 8px 12px; gap: 10px; }
+    .top-search input { width: 160px; }
+    .advisor-panel { padding: 12px; width: 100%; }
+    .rec-text { font-size: 28px; }
+}

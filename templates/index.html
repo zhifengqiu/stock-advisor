@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>量化因子 - 股票操作建议系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- ====== 首页搜索 ====== -->
+    <div id="landing" class="landing">
+        <div class="landing-content">
+            <h1 class="logo">量化因子</h1>
+            <p class="tagline">AI + 技术面 + 消息面，多维度量化操作建议</p>
+            <div class="search-box-outer">
+                <div class="search-box">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                    <input id="searchInput" type="text" placeholder="输入股票代码或名称，如 002384 或 东山精密" autocomplete="off">
+                    <button id="searchBtn" onclick="doSearch()">分析</button>
+                </div>
+                <div id="suggestions" class="suggestions hidden"></div>
+            </div>
+            <div class="hot-tags">
+                <span>热门:</span>
+                <a href="#" onclick="quickSearch('002384')">东山精密</a>
+                <a href="#" onclick="quickSearch('002475')">立讯精密</a>
+                <a href="#" onclick="quickSearch('600519')">贵州茅台</a>
+                <a href="#" onclick="quickSearch('000858')">五粮液</a>
+                <a href="#" onclick="quickSearch('300750')">宁德时代</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 分析页面 ====== -->
+    <div id="mainPage" class="main-page hidden">
+        <!-- 顶部搜索栏 -->
+        <header class="top-bar">
+            <div class="top-bar-left" onclick="goHome()">
+                <span class="top-logo">量化因子</span>
+            </div>
+            <div class="top-search">
+                <input id="topSearchInput" type="text" placeholder="搜索其他股票..." autocomplete="off"
+                       oninput="onTopSearchInput()" onkeydown="if(event.key==='Enter')doTopSearch()">
+                <button onclick="doTopSearch()">搜索</button>
+                <div id="topSuggestions" class="suggestions top-suggestions hidden"></div>
+            </div>
+            <div class="stock-info" id="stockInfo"></div>
+        </header>
+
+        <!-- 主体内容 -->
+        <div class="content">
+            <!-- 左侧：图表 -->
+            <div class="chart-panel">
+                <div class="chart-header">
+                    <div id="chartTitle" class="chart-title">请搜索股票</div>
+                    <div class="chart-tabs">
+                        <button class="chart-tab active" data-range="3m" onclick="switchRange(this)">3月</button>
+                        <button class="chart-tab" data-range="6m" onclick="switchRange(this)">6月</button>
+                        <button class="chart-tab" data-range="1y" onclick="switchRange(this)">1年</button>
+                        <button class="chart-tab" data-range="all" onclick="switchRange(this)">全部</button>
+                    </div>
+                </div>
+                <div id="klineChart" class="chart-container"></div>
+            </div>
+
+            <!-- 右侧：建议面板 -->
+            <div class="advisor-panel">
+                <!-- 策略切换 -->
+                <div class="strategy-tabs">
+                    <button class="strategy-tab active" data-strategy="short" onclick="switchStrategy(this)">
+                        短线
+                    </button>
+                    <button class="strategy-tab" data-strategy="medium" onclick="switchStrategy(this)">
+                        中线
+                    </button>
+                    <button class="strategy-tab" data-strategy="long" onclick="switchStrategy(this)">
+                        长线
+                    </button>
+                </div>
+
+                <!-- 核心建议 -->
+                <div id="recCard" class="rec-card">
+                    <div class="rec-label">操作建议</div>
+                    <div id="recText" class="rec-text">--</div>
+                    <div class="rec-meta">
+                        <span>信号强度: <b id="recStrength">--</b></span>
+                        <span>评分: <b id="recScore">--</b></span>
+                    </div>
+                </div>
+
+                <!-- 关键价位 -->
+                <div class="levels-card">
+                    <h3>关键价位</h3>
+                    <div class="levels-grid">
+                        <div class="level-item">
+                            <span class="level-label">当前价</span>
+                            <span id="levelCurrent" class="level-value">--</span>
+                        </div>
+                        <div class="level-item">
+                            <span class="level-label">支撑位</span>
+                            <span id="levelSupport" class="level-value green">--</span>
+                        </div>
+                        <div class="level-item">
+                            <span class="level-label">压力位</span>
+                            <span id="levelResistance" class="level-value red">--</span>
+                        </div>
+                        <div class="level-item">
+                            <span class="level-label">建议止损</span>
+                            <span id="levelStopLoss" class="level-value">--</span>
+                        </div>
+                        <div class="level-item">
+                            <span class="level-label">目标价</span>
+                            <span id="levelTarget" class="level-value green">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 技术面信号 -->
+                <div class="signals-card">
+                    <h3>技术面信号</h3>
+                    <div id="signalsList" class="signals-list">
+                        <div class="loading-text">请先搜索股票</div>
+                    </div>
+                </div>
+
+                <!-- 消息面 -->
+                <div class="news-card">
+                    <h3>消息面分析</h3>
+                    <div id="newsList" class="news-list">
+                        <div class="loading-text">请先搜索股票</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <p>正在分析中...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
