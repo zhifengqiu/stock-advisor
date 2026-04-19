@@ -135,6 +135,23 @@ def _load_stock_list_local():
     return None
 
 
+def _get_stock_name(code):
+    """轻量级获取股票名称（仅查缓存/本地文件，不触发API）"""
+    # 先从内存缓存找
+    stocks = _stock_list_cache.get("data")
+    if stocks:
+        for s in stocks:
+            if s["code"] == code:
+                return s["name"]
+    # 再从本地文件找
+    local_stocks = _load_stock_list_local()
+    if local_stocks:
+        for s in local_stocks:
+            if s["code"] == code:
+                return s["name"]
+    return code
+
+
 def get_stock_list(force_refresh=False):
     """获取A股全部股票列表（内存缓存 → API → 本地文件，三级兜底）"""
     now = time.time()
@@ -1148,13 +1165,8 @@ def get_stock_analysis(code):
         if df.empty:
             return jsonify({"error": "未找到该股票数据"}), 404
 
-        # 获取股票名称
-        stock_name = code
-        stocks = get_stock_list()
-        for s in stocks:
-            if s["code"] == code:
-                stock_name = s["name"]
-                break
+        # 获取股票名称（仅查缓存，不触发API拉取5500只股票）
+        stock_name = _get_stock_name(code)
 
         # 技术分析（纯计算，快速）
         analyzer = StockAnalyzer(df)
@@ -1193,12 +1205,7 @@ def get_stock_news(code):
         if not code.isdigit() or len(code) != 6:
             return jsonify({"error": "无效代码"}), 400
 
-        stock_name = code
-        stocks = get_stock_list()
-        for s in stocks:
-            if s["code"] == code:
-                stock_name = s["name"]
-                break
+        stock_name = _get_stock_name(code)
 
         news_sentiment = analyze_news_sentiment(code, stock_name)
         return jsonify(news_sentiment)
