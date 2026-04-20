@@ -16,7 +16,7 @@
 | 消息面分析 | PE/PB估值评估、个股新闻关键词情感分析 |
 | 关键价位 | 自动计算支撑位、压力位、建议止损价、目标价 |
 | 历史记录 | 分析结果自动保存，可一键查看历史或重新加载 |
-| 多数据源 | 东财(akshare) → 新浪财经 → 本地JSON文件，三级兜底 |
+| 多数据源 | Yahoo Finance(海外首选) → 新浪财经 → 本地JSON文件，三级兜底 |
 
 ## 项目结构
 
@@ -116,13 +116,31 @@ python app.py
 
 | 接口 | 返回内容 | 响应速度 |
 |------|----------|----------|
-| `GET /api/stock/<code>` | K线数据 + 技术指标分析 | 快（纯计算） |
+| `GET /api/stock/<code>` | K线数据 + 技术指标分析 | 快（纯计算 + Yahoo/Sina） |
 | `GET /api/stock/<code>/news` | PE/PB估值 + 新闻情感分析 | 慢（需调外部API） |
+| `GET /api/debug/sources/<code>` | 各数据源连通性测试 | 调试用 |
 
 前端加载流程：
 1. 点击搜索 → **立即跳转**分析页（不等API）
 2. 主接口返回 → 渲染K线图 + 技术面建议
 3. 消息面接口异步返回 → 渲染估值和新闻
+
+### 数据获取架构（海外部署优化）
+
+```
+/api/stock/<code> 请求
+  ↓
+顺序尝试（硬性25秒截止）：
+  1. Yahoo Finance（全球CDN，海外 ~0.3s） ← 海外首选
+  2. 新浪财经（国内 ~0.2s，海外 ~0.8s）
+  3. 本地缓存文件
+  ↓
+获取股票名称：仅查本地缓存（_get_stock_name），不触发API
+  ↓
+技术分析：纯内存计算（毫秒级）
+```
+
+**关键优化**：`get_stock_list()` 会拉取全市场5500+只股票（从海外30s+超时），已改用轻量级 `_get_stock_name()` 仅查本地缓存文件。
 
 ### 搜索优化
 
@@ -134,6 +152,7 @@ python app.py
 
 | 优化项 | 说明 |
 |--------|------|
+| 轻量名称查询 | `_get_stock_name()` 仅查缓存文件，不拉取全市场数据 |
 | 单股查询 | 消息面用百度估值API查询单只股票PE/PB，不加载全市场5500只 |
 | 及时释放 | `del df; gc.collect()` 主动回收 DataFrame 内存 |
 | Worker配置 | 1 worker + 120s超时 + 50请求后回收 |
@@ -174,19 +193,30 @@ print(f'缓存重建完成: {len(stocks)} 只')
 - 首次部署后需要触发一次数据加载（手动访问 `/api/stock/<任意代码>` 即可预热）
 - 确保代码仓库中包含 `stock_list_cache.json` 文件
 
-### 3. 分析失败（ConnectionError / RemoteDisconnected）
+### 3. 分析失败（加载失败: 服务器响应超时 / Unexpected token '<'）
 
-**现象**: 点击分析后提示 "分析失败: Connection aborted"
+**现象**: 部署到 Render 后，搜索股票显示 "加载失败: 服务器响应超时" 或 "Unexpected token '<'"
 
-**原因**: 东方财富和新浪财经的API间歇性不稳定，网络波动时会出现
+**原因**:
+1. **`get_stock_list()` 拉取全市场数据超时**（根本原因）：首次请求时 akshare 拉取5500+只A股列表，从美国服务器需30s+
+2. **Yahoo Finance 从中国大陆被墙**：`query1.finance.yahoo.com` 返回403
+3. **Render 免费版 30 秒 LB 超时**：后端超时后 Render 返回 HTML 500，前端收到 HTML 而非 JSON
 
-**处理方案**:
-- 程序已内置三级兜底机制：
-  1. 东财API（带重试 + 指数退避）
-  2. 新浪财经API（备用数据源）
-  3. 本地缓存文件
-- 通常等几分钟后重试即可恢复
-- 如果持续失败，检查网络是否能访问 `money.finance.sina.com.cn`
+**处理方案（已修复）**:
+- 主接口用 `_get_stock_name(code)` 替代 `get_stock_list()`，仅查本地缓存（毫秒级）
+- 数据源改为 Yahoo Finance（海外首选）→ 新浪财经 → 本地文件
+- 前端所有 `fetch` 调用改用 `resp.text()` + `JSON.parse()` 安全解析，HTML 响应不再崩溃
+- 添加 `/api/debug/sources/<code>` 调试接口，可逐个测试数据源连通性
+
+**调试方法**:
+```bash
+# 检查服务状态
+curl https://your-app.onrender.com/api/health
+
+# 测试各数据源
+curl https://your-app.onrender.com/api/debug/sources/600519
+# 返回示例: {"yahoo":{"status":"ok","rows":243,"time":"0.3s"},"sina":{"status":"ok","rows":800,"time":"0.8s"}}
+```
 
 ### 4. Render 部署 HTTP 500 + Worker OOM (SIGKILL)
 
@@ -269,13 +299,26 @@ Render 会在 1-2 分钟内自动完成重新部署。
 | 层 | 技术 |
 |----|------|
 | 后端 | Python Flask |
-| 数据源 | akshare (东财) + 新浪财经 + 百度估值 + 本地JSON缓存 |
+| 数据源 | Yahoo Finance (海外首选) + 新浪财经 + 百度估值 + 本地JSON缓存 |
 | 技术指标 | 纯 Python 实现（无 TA-Lib 依赖） |
 | 拼音搜索 | pypinyin |
 | 前端图表 | ECharts 5 |
 | 前端缓存 | localStorage（历史记录） |
 | 服务器 | gunicorn |
 | 部署 | Render.com |
+
+## 海外部署踩坑记录
+
+| 坑 | 原因 | 解决方案 |
+|----|------|----------|
+| Yahoo Finance 返回 403 | 从中国大陆被墙，2021年起不可访问 | 海外服务器（Render）直接请求正常；本地开发需代理 |
+| `get_stock_list()` 导致30s超时 | akshare拉取5500+只A股全量数据，海外极慢 | 改用 `_get_stock_name()` 仅查本地缓存文件 |
+| 前端 `Unexpected token '<'` | Render LB 30s超时返回HTML错误页，前端 `resp.json()` 崩溃 | 改用 `resp.text()` + `JSON.parse()` 安全解析 |
+| BaoStock TCP 连接失败 | 海外无法直接访问 BaoStock 服务器 | 改用 Yahoo Finance HTTP API |
+| akshare 无 timeout 挂起 | akshare 内部调用无超时参数 | 已简化为 retries=1，快速失败 |
+| `innerHTML=""` 导致图表空白 | 清空DOM导致ECharts实例丢失 | 改用 `klineChart.clear()` 保留实例 |
+| `stock_zh_a_spot_em()` OOM | 加载全市场5500+只股票行情爆内存 | 改用单股查询 `stock_zh_valuation_baidu` |
+| Twelve Data 免费版不支持A股 | A股数据需Pro/Venture付费计划 | 使用 Yahoo Finance + 新浪作为免费替代 |
 
 ## 量化因子体系
 
